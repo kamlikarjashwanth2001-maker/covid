@@ -1,10 +1,5 @@
-# 📄 Clean & Simple README.md
+README.md
 
-**Copy this and paste into GitHub:**
-
----
-
-```markdown
 # COVID-19 Case Reporting System
 
 A MuleSoft API integration project for managing COVID-19 cases, vaccinations, and WHO reporting using MySQL database.
