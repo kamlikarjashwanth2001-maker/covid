@@ -1,0 +1,348 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" 
+    xmlns:db="http://www.mulesoft.org/schema/mule/db"
+    xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" 
+    xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" 
+    xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" 
+    xmlns:http="http://www.mulesoft.org/schema/mule/http" 
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+    xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd 
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd 
+http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd 
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <http:listener-config name="covid-httpListenerConfig">
+        <http:listener-connection host="0.0.0.0" port="8081" />
+    </http:listener-config>
+
+    <db:config name="MySQL_Config" doc:name="MySQL Database Config">
+        <db:my-sql-connection 
+            host="sql12.freesqldatabase.com" 
+            port="3306" 
+            user="sql12827278" 
+            password="X1Hg5zRsXt" 
+            database="sql12827278"/>
+    </db:config>
+
+    <apikit:config name="covid-config" 
+        api="resource::a98bd9d6-14d4-4f84-8cc3-b7cdf3b15d07:covid:1.0.0:raml:zip:covid.raml" 
+        outboundHeadersMapName="outboundHeaders" 
+        httpStatusVarName="httpStatus" />
+
+    <flow name="covid-main">
+        <http:listener config-ref="covid-httpListenerConfig" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="covid-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:BAD_REQUEST">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Bad request"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Resource not found"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Method not allowed"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">405</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="covid-console">
+        <http:listener config-ref="covid-httpListenerConfig" path="/console/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+        </http:listener>
+        <apikit:console config-ref="covid-config" />
+    </flow>
+
+    <!-- POST /cases -->
+    <flow name="post:\cases:application\json:covid-config">
+        <logger level="INFO" message="Registering case"/>
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="caseId"><![CDATA[%dw 2.0
+output application/java
+---
+payload.caseId]]></ee:set-variable>
+                <ee:set-variable variableName="patientName"><![CDATA[%dw 2.0
+output application/java
+---
+payload.patientName]]></ee:set-variable>
+                <ee:set-variable variableName="country"><![CDATA[%dw 2.0
+output application/java
+---
+payload.country]]></ee:set-variable>
+                <ee:set-variable variableName="age"><![CDATA[%dw 2.0
+output application/java
+---
+payload.age]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <db:select config-ref="MySQL_Config">
+            <db:sql>SELECT * FROM covid_cases WHERE case_id = :caseId ORDER BY id DESC LIMIT 1</db:sql>
+            <db:input-parameters><![CDATA[#[{caseId: vars.caseId}]]]></db:input-parameters>
+        </db:select>
+
+        <choice>
+            <when expression="#[sizeOf(payload) > 0 and payload[0].status != 'RECOVERED']">
+                <db:update config-ref="MySQL_Config">
+                    <db:sql>UPDATE covid_cases SET status='POSITIVE', registered_date=NOW() WHERE case_id = :caseId</db:sql>
+                    <db:input-parameters><![CDATA[#[{caseId: vars.caseId}]]]></db:input-parameters>
+                </db:update>
+            </when>
+            <otherwise>
+                <db:insert config-ref="MySQL_Config">
+                    <db:sql>INSERT INTO covid_cases (case_id, patient_name, country, age, status) VALUES (:caseId, :name, :country, :age, 'POSITIVE')</db:sql>
+                    <db:input-parameters><![CDATA[#[{
+caseId: vars.caseId,
+name: vars.patientName,
+country: vars.country,
+age: vars.age
+}]]]></db:input-parameters>
+                </db:insert>
+            </otherwise>
+        </choice>
+
+        <db:insert config-ref="MySQL_Config">
+            <db:sql>INSERT INTO who_reports (case_id, country, status) VALUES (:caseId, :country, 'POSITIVE')</db:sql>
+            <db:input-parameters><![CDATA[#[{caseId: vars.caseId, country: vars.country}]]]></db:input-parameters>
+        </db:insert>
+
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  status: "SUCCESS",
+  message: "Case registered and reported to WHO",
+  caseId: vars.caseId
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- GET /cases -->
+    <flow name="get:\cases:covid-config">
+        <db:select config-ref="MySQL_Config">
+            <db:sql>SELECT * FROM covid_cases</db:sql>
+        </db:select>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map (item) -> {
+  caseId: item.case_id,
+  patientName: item.patient_name,
+  country: item.country,
+  age: item.age,
+  status: item.status,
+  registeredDate: item.registered_date as String default ""
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- GET /cases/{caseId} -->
+    <flow name="get:\cases\(caseId):covid-config">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="caseId">attributes.uriParams.'caseId'</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <db:select config-ref="MySQL_Config">
+            <db:sql>SELECT * FROM covid_cases WHERE case_id = :caseId</db:sql>
+            <db:input-parameters><![CDATA[#[{caseId: vars.caseId}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map (item) -> {
+  caseId: item.case_id,
+  patientName: item.patient_name,
+  country: item.country,
+  age: item.age,
+  status: item.status,
+  registeredDate: item.registered_date as String default ""
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- PUT /cases/{caseId} -->
+    <flow name="put:\cases\(caseId):application\json:covid-config">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="caseId">attributes.uriParams.'caseId'</ee:set-variable>
+                <ee:set-variable variableName="newStatus">payload.status</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <db:update config-ref="MySQL_Config">
+            <db:sql>UPDATE covid_cases SET status = :status WHERE case_id = :caseId</db:sql>
+            <db:input-parameters><![CDATA[#[{status: vars.newStatus, caseId: vars.caseId}]]]></db:input-parameters>
+        </db:update>
+        <db:insert config-ref="MySQL_Config">
+            <db:sql>INSERT INTO who_reports (case_id, status) VALUES (:caseId, :status)</db:sql>
+            <db:input-parameters><![CDATA[#[{caseId: vars.caseId, status: vars.newStatus}]]]></db:input-parameters>
+        </db:insert>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  status: "SUCCESS",
+  message: "Case status updated to " ++ vars.newStatus,
+  caseId: vars.caseId
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- POST /vaccinations -->
+    <flow name="post:\vaccinations:application\json:covid-config">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="vaccineId">payload.vaccineId</ee:set-variable>
+                <ee:set-variable variableName="patientId">payload.patientId</ee:set-variable>
+                <ee:set-variable variableName="vaccineName">payload.vaccineName</ee:set-variable>
+                <ee:set-variable variableName="doseNumber">payload.doseNumber</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <db:insert config-ref="MySQL_Config">
+            <db:sql>INSERT INTO vaccinations (vaccine_id, patient_id, vaccine_name, dose_number) VALUES (:vid, :pid, :vname, :dose)</db:sql>
+            <db:input-parameters><![CDATA[#[{
+vid: vars.vaccineId,
+pid: vars.patientId,
+vname: vars.vaccineName,
+dose: vars.doseNumber
+}]]]></db:input-parameters>
+        </db:insert>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  status: "SUCCESS",
+  message: "Vaccination registered and reported to WHO",
+  patientId: vars.patientId
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- GET /vaccinations -->
+    <flow name="get:\vaccinations:covid-config">
+        <db:select config-ref="MySQL_Config">
+            <db:sql>SELECT * FROM vaccinations</db:sql>
+        </db:select>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map (item) -> {
+  vaccineId: item.vaccine_id,
+  patientId: item.patient_id,
+  vaccineName: item.vaccine_name,
+  doseNumber: item.dose_number,
+  vaccinatedDate: item.vaccinated_date as String default ""
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- GET /monitoring/post-vaccination -->
+    <flow name="get:\monitoring\post-vaccination:covid-config">
+        <db:select config-ref="MySQL_Config">
+            <db:sql>SELECT c.* FROM covid_cases c INNER JOIN vaccinations v ON c.case_id = v.patient_id WHERE c.status = 'POSITIVE' AND c.registered_date > v.vaccinated_date</db:sql>
+        </db:select>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map (item) -> {
+  caseId: item.case_id,
+  patientName: item.patient_name,
+  country: item.country,
+  age: item.age,
+  status: item.status,
+  registeredDate: item.registered_date as String default ""
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- GET /monitoring/country-report -->
+    <flow name="get:\monitoring\country-report:covid-config">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="country">attributes.queryParams.country</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <db:select config-ref="MySQL_Config">
+            <db:sql>SELECT COUNT(*) AS totalCases, SUM(CASE WHEN status='POSITIVE' THEN 1 ELSE 0 END) AS positiveCases, SUM(CASE WHEN status='RECOVERED' THEN 1 ELSE 0 END) AS recoveredCases, SUM(CASE WHEN status='DEATH' THEN 1 ELSE 0 END) AS deathCases, SUM(CASE WHEN status='INVALID' THEN 1 ELSE 0 END) AS invalidCases FROM covid_cases WHERE country = :country</db:sql>
+            <db:input-parameters><![CDATA[#[{country: vars.country}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  country: vars.country,
+  totalCases: (payload[0].totalCases default 0) as Number,
+  positiveCases: (payload[0].positiveCases default 0) as Number,
+  recoveredCases: (payload[0].recoveredCases default 0) as Number,
+  deathCases: (payload[0].deathCases default 0) as Number,
+  invalidCases: (payload[0].invalidCases default 0) as Number
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+</mule>
